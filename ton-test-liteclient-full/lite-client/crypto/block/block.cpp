@@ -34,7 +34,7 @@ bool pack_std_smc_addr_to(char result[48], bool base64_url, ton::WorkchainId wc,
     return false;
   }
   unsigned char buffer[36];
-  buffer[0] = (unsigned char)(0x11 + bounceable * 0x40 + testnet * 0x80);
+  buffer[0] = (unsigned char)(0x51 - bounceable * 0x40 + testnet * 0x80);
   buffer[1] = (unsigned char)wc;
   memcpy(buffer + 2, addr.data(), 32);
   unsigned crc = td::crc16(td::Slice{buffer, 34});
@@ -69,8 +69,8 @@ bool unpack_std_smc_addr(const char packed[48], ton::WorkchainId& wc, ton::StdSm
     return false;
   }
   testnet = (buffer[0] & 0x80);
-  bounceable = (buffer[0] & 0x40);
-  wc = (char)buffer[1];
+  bounceable = !(buffer[0] & 0x40);
+  wc = (td::int8)buffer[1];
   memcpy(addr.data(), buffer + 2, 32);
   return true;
 }
@@ -121,6 +121,84 @@ bool StdAddress::rdeserialize(const char from[48]) {
 bool StdAddress::operator==(const StdAddress& other) const {
   return workchain == other.workchain && addr == other.addr && bounceable == other.bounceable &&
          testnet == other.testnet;
+}
+
+int parse_hex_digit(int c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  c |= 0x20;
+  if (c >= 'a' && c <= 'z') {
+    return c - 'a' + 10;
+  }
+  return -1;
+}
+
+bool StdAddress::parse_addr(td::Slice acc_string) {
+  if (rdeserialize(acc_string)) {
+    return true;
+  }
+  testnet = false;
+  bounceable = true;
+  auto pos = acc_string.find(':');
+  if (pos != std::string::npos) {
+    if (pos > 10) {
+      return invalidate();
+    }
+    auto tmp = acc_string.substr(0, pos);
+    auto r_wc = td::to_integer_safe<ton::WorkchainId>(tmp);
+    if (r_wc.is_error()) {
+      return invalidate();
+    }
+    workchain = r_wc.move_as_ok();
+    if (workchain == ton::workchainInvalid) {
+      return invalidate();
+    }
+    ++pos;
+  } else {
+    pos = 0;
+  }
+  // LOG(DEBUG) << "parsing " << acc_string << " address";
+  if (acc_string.size() != pos + 64) {
+    return invalidate();
+  }
+  for (unsigned i = 0; i < 64; i++) {
+    int x = parse_hex_digit(acc_string[pos + i]), m = 15;
+    if (x < 0) {
+      return invalidate();
+    }
+    if (!(i & 1)) {
+      x <<= 4;
+      m <<= 4;
+    }
+    addr.data()[i >> 1] = (unsigned char)((addr.data()[i >> 1] & ~m) | x);
+  }
+  return true;
+}
+
+bool parse_std_account_addr(td::Slice acc_string, ton::WorkchainId& wc, ton::StdSmcAddress& addr, bool* bounceable,
+                            bool* testnet_only) {
+  StdAddress a;
+  if (!a.parse_addr(acc_string)) {
+    return false;
+  }
+  wc = a.workchain;
+  addr = a.addr;
+  if (testnet_only) {
+    *testnet_only = a.testnet;
+  }
+  if (bounceable) {
+    *bounceable = a.bounceable;
+  }
+  return true;
+}
+
+td::Result<StdAddress> StdAddress::parse(td::Slice acc_string) {
+  StdAddress res;
+  if (res.parse_addr(acc_string)) {
+    return res;
+  }
+  return td::Status::Error("Failed to parse account address");
 }
 
 void ShardId::init() {
@@ -246,8 +324,7 @@ bool MsgProcessedUpto::contains(const MsgProcessedUpto& other) const & {
 bool MsgProcessedUpto::contains(ton::ShardId other_shard, ton::LogicalTime other_lt, td::ConstBitPtr other_hash,
                                 ton::BlockSeqno other_mc_seqno) const & {
   return ton::shard_is_ancestor(shard, other_shard) && mc_seqno >= other_mc_seqno &&
-         (last_inmsg_lt > other_lt ||
-          (last_inmsg_lt == other_lt && td::bitstring::bits_memcmp(last_inmsg_hash.bits(), other_hash, 256) > 0));
+         (last_inmsg_lt > other_lt || (last_inmsg_lt == other_lt && !(last_inmsg_hash < other_hash)));
 }
 
 bool MsgProcessedUptoCollection::insert(ton::LogicalTime last_proc_lt, td::ConstBitPtr last_proc_hash,
@@ -264,22 +341,36 @@ bool MsgProcessedUptoCollection::insert(ton::LogicalTime last_proc_lt, td::Const
   return true;
 }
 
+ton::BlockSeqno MsgProcessedUptoCollection::min_mc_seqno() const {
+  ton::BlockSeqno min_mc_seqno = ~0U;
+  for (const auto& z : list) {
+    min_mc_seqno = std::min(min_mc_seqno, z.mc_seqno);
+  }
+  return min_mc_seqno;
+}
+
 bool MsgProcessedUptoCollection::compactify() {
   std::sort(list.begin(), list.end());
-  std::size_t i, j, k = 0, n = list.size();
+  std::size_t i, j, k = 0, m = 0, n = list.size();
+  std::vector<bool> mark(n, false);
+  assert(mark.size() == n);
   for (i = 0; i < n; i++) {
-    bool f = true;
     for (j = 0; j < n; j++) {
-      if (j != i && list[j].contains(list[i])) {
-        f = false;
+      if (j != i && !mark[j] && list[j].contains(list[i])) {
+        mark[i] = true;
+        ++m;
         break;
       }
     }
-    if (f) {
-      list[k++] = list[i];
-    }
   }
-  list.resize(k);
+  if (m) {
+    for (i = 0; i < n; i++) {
+      if (!mark[i]) {
+        list[k++] = list[i];
+      }
+    }
+    list.resize(k);
+  }
   return true;
 }
 
@@ -582,7 +673,7 @@ unsigned VarUInteger::precompute_integer_size(td::RefInt256 value) const {
   if (value.is_null()) {
     return 0xfff;
   }
-  int k = (*value)->bit_size(false);
+  int k = value->bit_size(false);
   return k <= (n - 1) * 8 ? ln + ((k + 7) & -8) : 0xfff;
 }
 
@@ -2164,7 +2255,7 @@ bool BlockIdExt::pack(vm::CellBuilder& cb, const ton::BlockIdExt& data) const {
 const BlockIdExt t_BlockIdExt;
 
 bool ShardState::skip(vm::CellSlice& cs) const {
-  return get_tag(cs) == shard_state && cs.advance(64)  // shard_state#9023afde blockchain_id:int32
+  return get_tag(cs) == shard_state && cs.advance(64)  // shard_state#9023afdf blockchain_id:int32
          && t_ShardIdent.skip(cs)                      // shard_id:ShardIdent
          && cs.advance(32 + 32 + 32 + 64 +
                        32)  // seq_no:int32 vert_seq_no:# gen_utime:uint32 gen_lt:uint64 min_ref_mc_seqno:uint32
@@ -2173,8 +2264,7 @@ bool ShardState::skip(vm::CellSlice& cs) const {
          && t_ShardAccounts.skip(cs)        // accounts:ShardAccounts
          &&
          cs.advance_refs(
-             1)  // ^[ total_balance:CurrencyCollection total_validator_fees:CurrencyCollection libraries:(HashmapE 256 LibDescr) ]
-         && Maybe<BlkMasterInfo>{}.skip(cs)         // master_ref:(Maybe BlkMasterInfo)
+             1)  // ^[ total_balance:CurrencyCollection total_validator_fees:CurrencyCollection libraries:(HashmapE 256 LibDescr) master_ref:(Maybe BlkMasterInfo) ]
          && Maybe<RefTo<McStateExtra>>{}.skip(cs);  // custom:(Maybe ^McStateExtra)
 }
 
@@ -2190,25 +2280,26 @@ bool ShardState::validate_skip(vm::CellSlice& cs) const {
          && t_ShardAccounts.validate_skip(cs)        // accounts:ShardAccounts
          &&
          t_ShardState_aux.validate_skip_ref(
-             cs)  // ^[ total_balance:CurrencyCollection total_validator_fees:CurrencyCollection libraries:(HashmapE 256 LibDescr) ]
-         && Maybe<BlkMasterInfo>{}.validate_skip(cs)         // master_ref:(Maybe BlkMasterInfo)
+             cs)  // ^[ total_balance:CurrencyCollection total_validator_fees:CurrencyCollection libraries:(HashmapE 256 LibDescr) master_ref:(Maybe BlkMasterInfo) ]
          && Maybe<RefTo<McStateExtra>>{}.validate_skip(cs);  // custom:(Maybe ^McStateExtra)
 }
 
 const ShardState t_ShardState;
 
 bool ShardState_aux::skip(vm::CellSlice& cs) const {
-  return cs.advance(128)                         // overload_history:uint64 underload_history:uint64
-         && t_CurrencyCollection.skip(cs)        // total_balance:CurrencyCollection
-         && t_CurrencyCollection.skip(cs)        // total_validator_fees:CurrencyCollection
-         && HashmapE{256, t_LibDescr}.skip(cs);  // libraries:(HashmapE 256 LibDescr)
+  return cs.advance(128)                        // overload_history:uint64 underload_history:uint64
+         && t_CurrencyCollection.skip(cs)       // total_balance:CurrencyCollection
+         && t_CurrencyCollection.skip(cs)       // total_validator_fees:CurrencyCollection
+         && HashmapE{256, t_LibDescr}.skip(cs)  // libraries:(HashmapE 256 LibDescr)
+         && Maybe<BlkMasterInfo>{}.skip(cs);    // master_ref:(Maybe BlkMasterInfo)
 }
 
 bool ShardState_aux::validate_skip(vm::CellSlice& cs) const {
-  return cs.advance(128)                                  // overload_history:uint64 underload_history:uint64
-         && t_CurrencyCollection.validate_skip(cs)        // total_balance:CurrencyCollection
-         && t_CurrencyCollection.validate_skip(cs)        // total_validator_fees:CurrencyCollection
-         && HashmapE{256, t_LibDescr}.validate_skip(cs);  // libraries:(HashmapE 256 LibDescr)
+  return cs.advance(128)                                 // overload_history:uint64 underload_history:uint64
+         && t_CurrencyCollection.validate_skip(cs)       // total_balance:CurrencyCollection
+         && t_CurrencyCollection.validate_skip(cs)       // total_validator_fees:CurrencyCollection
+         && HashmapE{256, t_LibDescr}.validate_skip(cs)  // libraries:(HashmapE 256 LibDescr)
+         && Maybe<BlkMasterInfo>{}.validate_skip(cs);    // master_ref:(Maybe BlkMasterInfo)
 }
 
 const ShardState_aux t_ShardState_aux;
@@ -2274,7 +2365,7 @@ bool store_Maybe_Grams(vm::CellBuilder& cb, td::RefInt256 value) {
 }
 
 bool store_Maybe_Grams_nz(vm::CellBuilder& cb, td::RefInt256 value) {
-  if (value.is_null() || !(*value)->sgn()) {
+  if (value.is_null() || !value->sgn()) {
     return cb.store_long_bool(0, 1);
   } else {
     return cb.store_long_bool(1, 1) && block::tlb::t_Grams.store_integer_ref(cb, std::move(value));
@@ -2558,6 +2649,48 @@ bool check_old_mc_block_id(vm::Dictionary& prev_blocks_dict, const ton::BlockIdE
     return false;
   }
   return blkid.root_hash == data.root_hash && blkid.file_hash == data.file_hash;
+}
+
+td::Result<Ref<vm::Cell>> get_block_transaction(Ref<vm::Cell> block_root, ton::WorkchainId workchain,
+                                                const ton::StdSmcAddress& addr, ton::LogicalTime lt) {
+  block::gen::Block::Record block;
+  block::gen::BlockInfo::Record info;
+  if (!(tlb::unpack_cell(std::move(block_root), block) && tlb::unpack_cell(std::move(block.info), info))) {
+    return td::Status::Error("cannot unpack block header");
+  }
+  Ref<vm::Cell> trans_root;
+  if (lt > info.start_lt && lt < info.end_lt) {
+    // lt belongs to this block
+    block::gen::BlockExtra::Record extra;
+    if (!(tlb::unpack_cell(block.extra, extra))) {
+      return td::Status::Error("cannot unpack block extra information");
+    }
+    vm::AugmentedDictionary account_blocks_dict{extra.account_blocks->prefetch_ref(), 256,
+                                                block::tlb::aug_ShardAccountBlocks};
+    auto ab_csr = account_blocks_dict.lookup(addr);
+    if (ab_csr.not_null()) {
+      // account block for this account exists
+      block::gen::AccountBlock::Record acc_block;
+      if (!(tlb::csr_unpack(std::move(ab_csr), acc_block) && acc_block.account_addr == addr)) {
+        return td::Status::Error("cannot unpack AccountBlock");
+      }
+      vm::AugmentedDictionary trans_dict{vm::DictNonEmpty(), acc_block.transactions, 64,
+                                         block::tlb::aug_AccountTransactions};
+      return trans_dict.lookup_ref(td::BitArray<64>{static_cast<long long>(lt)});
+    }
+  }
+  return Ref<vm::Cell>{};
+}
+
+td::Result<Ref<vm::Cell>> get_block_transaction_try(Ref<vm::Cell> block_root, ton::WorkchainId workchain,
+                                                    const ton::StdSmcAddress& addr, ton::LogicalTime lt) {
+  try {
+    return get_block_transaction(std::move(block_root), workchain, addr, lt);
+  } catch (vm::VmError err) {
+    return td::Status::Error(std::string{"error while extracting transaction from block : "} + err.get_msg());
+  } catch (vm::VmVirtError err) {
+    return td::Status::Error(std::string{"virtualization error while traversing transaction proof : "} + err.get_msg());
+  }
 }
 
 }  // namespace block

@@ -14,20 +14,24 @@ using td::Ref;
 
 struct StdAddress {
   ton::WorkchainId workchain{ton::workchainInvalid};
+  bool bounceable{true};  // addresses must be bounceable by default
+  bool testnet{false};
   ton::StdSmcAddress addr;
-  bool bounceable;
-  bool testnet;
   StdAddress() = default;
   StdAddress(ton::WorkchainId _wc, const ton::StdSmcAddress& _addr, bool _bounce = true, bool _testnet = false)
-      : workchain(_wc), addr(_addr), bounceable(_bounce), testnet(_testnet) {
+      : workchain(_wc), bounceable(_bounce), testnet(_testnet), addr(_addr) {
   }
   StdAddress(ton::WorkchainId _wc, td::ConstBitPtr _addr, bool _bounce = true, bool _testnet = false)
-      : workchain(_wc), addr(_addr), bounceable(_bounce), testnet(_testnet) {
+      : workchain(_wc), bounceable(_bounce), testnet(_testnet), addr(_addr) {
   }
   StdAddress(std::string serialized);
   StdAddress(td::Slice from);
   bool is_valid() const {
     return workchain != ton::workchainInvalid;
+  }
+  bool invalidate() {
+    workchain = ton::workchainInvalid;
+    return false;
   }
   std::string rserialize(bool base64_url = false) const;
   bool rserialize_to(td::MutableSlice to, bool base64_url = false) const;
@@ -35,8 +39,14 @@ struct StdAddress {
   bool rdeserialize(td::Slice from);
   bool rdeserialize(std::string from);
   bool rdeserialize(const char from[48]);
+  bool parse_addr(td::Slice acc_string);
   bool operator==(const StdAddress& other) const;
+
+  static td::Result<StdAddress> parse(td::Slice acc_string);
 };
+
+bool parse_std_account_addr(td::Slice acc_string, ton::WorkchainId& wc, ton::StdSmcAddress& addr,
+                            bool* bounceable = nullptr, bool* testnet_only = nullptr);
 
 struct ShardId {
   ton::WorkchainId workchain_id;
@@ -138,6 +148,7 @@ struct MsgProcessedUptoCollection {
   bool insert(ton::LogicalTime last_proc_lt, td::ConstBitPtr last_proc_hash, ton::BlockSeqno mc_seqno);
   bool compactify();
   bool pack(vm::CellBuilder& cb);
+  ton::BlockSeqno min_mc_seqno() const;
   // NB: this is for checking whether we have already imported an internal message
   bool already_processed(const EnqueuedMsgDescr& msg) const;
 };
@@ -1023,7 +1034,7 @@ struct BlockIdExt final : TLB_Complex {
 extern const BlockIdExt t_BlockIdExt;
 
 struct ShardState final : TLB_Complex {
-  enum { shard_state = (int)0x9023afde };
+  enum { shard_state = (int)0x9023afdf };
   bool skip(vm::CellSlice& cs) const override;
   bool validate_skip(vm::CellSlice& cs) const override;
   int get_tag(const vm::CellSlice& cs) const override {
@@ -1123,5 +1134,10 @@ bool get_old_mc_block_id(vm::Dictionary& prev_blocks_dict, ton::BlockSeqno seqno
                          ton::LogicalTime* end_lt = nullptr);
 bool check_old_mc_block_id(vm::Dictionary* prev_blocks_dict, const ton::BlockIdExt& blkid);
 bool check_old_mc_block_id(vm::Dictionary& prev_blocks_dict, const ton::BlockIdExt& blkid);
+
+td::Result<Ref<vm::Cell>> get_block_transaction(Ref<vm::Cell> block_root, ton::WorkchainId workchain,
+                                                const ton::StdSmcAddress& addr, ton::LogicalTime lt);
+td::Result<Ref<vm::Cell>> get_block_transaction_try(Ref<vm::Cell> block_root, ton::WorkchainId workchain,
+                                                    const ton::StdSmcAddress& addr, ton::LogicalTime lt);
 
 }  // namespace block

@@ -456,6 +456,87 @@ TEST(Cell, MerkleProof) {
   }
 };
 
+TEST(Cell, MerkleProofCombine) {
+  td::Random::Xorshift128plus rnd{123};
+  for (int t = 0; t < 1000; t++) {
+    bool with_prunned_branches = true;
+    auto cell = gen_random_cell(rnd.fast(1, 1000), rnd, with_prunned_branches);
+    auto exploration1 = CellExplorer::random_explore(cell, rnd);
+    auto exploration2 = CellExplorer::random_explore(cell, rnd);
+
+    Ref<Cell> proof1;
+    {
+      auto usage_tree = std::make_shared<CellUsageTree>();
+      auto usage_cell = UsageCell::create(cell, usage_tree->root_ptr());
+      CellExplorer::explore(usage_cell, exploration1.ops);
+      proof1 = MerkleProof::generate(cell, usage_tree.get());
+
+      auto virtualized_proof = MerkleProof::virtualize(proof1, 1);
+      auto exploration = CellExplorer::explore(virtualized_proof, exploration1.ops);
+      ASSERT_EQ(exploration.log, exploration1.log);
+    }
+
+    Ref<Cell> proof2;
+    {
+      auto usage_tree = std::make_shared<CellUsageTree>();
+      auto usage_cell = UsageCell::create(cell, usage_tree->root_ptr());
+      CellExplorer::explore(usage_cell, exploration2.ops);
+      proof2 = MerkleProof::generate(cell, usage_tree.get());
+
+      auto virtualized_proof = MerkleProof::virtualize(proof2, 1);
+      auto exploration = CellExplorer::explore(virtualized_proof, exploration2.ops);
+      ASSERT_EQ(exploration.log, exploration2.log);
+    }
+
+    Ref<Cell> proof12;
+    {
+      auto usage_tree = std::make_shared<CellUsageTree>();
+      auto usage_cell = UsageCell::create(cell, usage_tree->root_ptr());
+      CellExplorer::explore(usage_cell, exploration1.ops);
+      CellExplorer::explore(usage_cell, exploration2.ops);
+      proof12 = MerkleProof::generate(cell, usage_tree.get());
+
+      auto virtualized_proof = MerkleProof::virtualize(proof12, 1);
+      auto exploration_a = CellExplorer::explore(virtualized_proof, exploration1.ops);
+      auto exploration_b = CellExplorer::explore(virtualized_proof, exploration2.ops);
+      ASSERT_EQ(exploration_a.log, exploration1.log);
+      ASSERT_EQ(exploration_b.log, exploration2.log);
+    }
+
+    Ref<Cell> proof_union;
+    {
+      proof_union = MerkleProof::combine(proof1, proof2);
+      ASSERT_EQ(proof_union->get_hash(), proof12->get_hash());
+
+      auto virtualized_proof = MerkleProof::virtualize(proof_union, 1);
+      auto exploration_a = CellExplorer::explore(virtualized_proof, exploration1.ops);
+      auto exploration_b = CellExplorer::explore(virtualized_proof, exploration2.ops);
+      ASSERT_EQ(exploration_a.log, exploration1.log);
+      ASSERT_EQ(exploration_b.log, exploration2.log);
+    }
+    {
+      auto cell = MerkleProof::virtualize(proof12, 1);
+
+      auto usage_tree = std::make_shared<CellUsageTree>();
+      auto usage_cell = UsageCell::create(cell, usage_tree->root_ptr());
+      CellExplorer::explore(usage_cell, exploration1.ops);
+      auto proof = MerkleProof::generate(cell, usage_tree.get());
+
+      auto virtualized_proof = MerkleProof::virtualize(proof, 2);
+      auto exploration = CellExplorer::explore(virtualized_proof, exploration1.ops);
+      ASSERT_EQ(exploration.log, exploration1.log);
+      if (proof->get_hash() != proof1->get_hash()) {
+        CellSlice(NoVm(), proof12).print_rec(std::cerr);
+        CellSlice(NoVm(), proof).print_rec(std::cerr);
+        CellSlice(NoVm(), proof1).print_rec(std::cerr);
+        LOG(ERROR) << proof->get_level() << " " << proof->get_hash().to_hex();
+        LOG(ERROR) << proof->get_level() << " " << proof1->get_hash().to_hex();
+        LOG(FATAL) << "?";
+      }
+    }
+  }
+};
+
 int X = 20;
 auto gen_merkle_update(Ref<Cell> cell, td::Random::Xorshift128plus &rnd, bool with_prunned_branches) {
   auto usage_tree = std::make_shared<CellUsageTree>();
@@ -1459,6 +1540,9 @@ TEST(TonDb, CompactArray) {
   };
 
   auto flush_to_db = [&] {
+    if (rnd() % 10 != 0) {
+      return;
+    }
     bool restart_db = rnd() % 20 == 0;
     bool reload_array = rnd() % 5 == 0;
     smt->set_root(array.root());
@@ -1561,9 +1645,9 @@ TEST(TonDb, CompactArrayOld) {
   }
   //LOG(ERROR) << "OK";
 
-  for (int i = 0; i < 10000; i++) {
-    if (i % 1000 == 999) {
-      //LOG(ERROR) << ton_db->stats();
+  for (int i = 0; i < 100; i++) {
+    if (i % 10 == 9) {
+      //LOG(ERROR) << ton_db->stat();
       ton_db.reset();
       ton_db = vm::TonDbImpl::open("ttt").move_as_ok();
     }
@@ -1662,6 +1746,45 @@ TEST(TonDb, DoNotMakeListsPrunned) {
   auto virtualized_proof = vm::MerkleProof::virtualize(proof, 1);
   ASSERT_TRUE(virtualized_proof->get_virtualization() == 0);
 }
+
+TEST(TonDb, CellStat) {
+  td::Random::Xorshift128plus rnd(123);
+  for (int i = 0; i < 100; i++) {
+    auto cell = vm::gen_random_cell(20, rnd, true);
+    auto usage_tree = std::make_shared<vm::CellUsageTree>();
+    auto usage_cell = vm::UsageCell::create(cell, usage_tree->root_ptr());
+    auto exploration = vm::CellExplorer::random_explore(usage_cell, rnd);
+    auto new_cell = gen_random_cell(rnd.fast(1, vm::X), rnd, true, std::move(exploration.visited_cells));
+
+    auto is_prunned = [&](const td::Ref<vm::Cell> &cell) {
+      return cell->get_tree_node().is_from_tree(usage_tree.get());
+    };
+    auto proof = vm::MerkleProof::generate_raw(new_cell, is_prunned);
+
+    vm::CellStorageStat stat;
+    stat.add_used_storage(new_cell);
+
+    vm::NewCellStorageStat new_stat;
+    new_stat.add_cell({});
+    new_stat.add_cell(new_cell);
+    ASSERT_EQ(stat.cells, new_stat.get_stat().cells);
+    ASSERT_EQ(stat.bits, new_stat.get_stat().bits);
+
+    vm::CellStorageStat proof_stat;
+    proof_stat.add_used_storage(proof);
+
+    vm::NewCellStorageStat new_proof_stat;
+    new_proof_stat.add_proof(new_cell, usage_tree.get());
+    CHECK(new_proof_stat.get_stat().cells == 0);
+    CHECK(new_proof_stat.get_proof_stat().cells <= proof_stat.cells);
+    CHECK(new_proof_stat.get_proof_stat().cells + new_proof_stat.get_proof_stat().external_refs >= proof_stat.cells);
+
+    vm::NewCellStorageStat new_all_stat;
+    new_all_stat.add_cell_and_proof(new_cell, usage_tree.get());
+    CHECK(new_proof_stat.get_proof_stat() == new_all_stat.get_proof_stat());
+    CHECK(new_stat.get_stat() == new_all_stat.get_stat());
+  }
+}
 struct String {
   String() {
     total_strings.add(1);
@@ -1693,7 +1816,7 @@ TEST(Ref, AtomicRef) {
         auto &node = nodes[td::Random::fast(0, threads_n / 3 - 1)];
         auto name = node.name_.load();
         if (name.not_null()) {
-          CHECK((**name).str == "one" || (**name).str == "twotwo");
+          CHECK(name->str == "one" || name->str == "twotwo");
         }
         if (td::Random::fast(0, 5) == 0) {
           auto new_string = td::Ref<td::Cnt<String>>{true, td::Random::fast(0, 1) == 0 ? "one" : "twotwo"};

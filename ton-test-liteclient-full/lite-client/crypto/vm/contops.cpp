@@ -302,7 +302,7 @@ int exec_if_bit_jmp(VmState* st, unsigned args) {
   stack.check_underflow(2);
   auto cont = stack.pop_cont();
   auto x = stack.pop_int_finite();
-  bool val = (*x)->get_bit(bit);
+  bool val = x->get_bit(bit);
   stack.push_int(std::move(x));
   if (val ^ negate) {
     return st->jump(std::move(cont));
@@ -327,7 +327,7 @@ int exec_if_bit_jmpref(VmState* st, CellSlice& cs, unsigned args, int pfx_bits) 
   Stack& stack = st->get_stack();
   VM_LOG(st) << "execute IF" << (negate ? "N" : "") << "BITJMPREF " << bit << " (" << cell->get_hash().to_hex() << ")";
   auto x = stack.pop_int_finite();
-  bool val = (*x)->get_bit(bit);
+  bool val = x->get_bit(bit);
   stack.push_int(std::move(x));
   if (val ^ negate) {
     return st->jump(Ref<OrdCont>{true, load_cell_slice_ref(std::move(cell)), st->get_cp()});
@@ -962,7 +962,7 @@ void register_continuation_dict_jump_ops(OpcodeTable& cp0) {
 
 int exec_throw_fixed(VmState* st, unsigned args, unsigned mask, int mode) {
   unsigned excno = args & mask;
-  VM_LOG(st) << "execute THROW" << (mode ? "IF" : "") << (mode & 1 ? " " : "NOT ") << excno;
+  VM_LOG(st) << "execute THROW" << (mode ? "IF" : "") << (mode == 2 ? "NOT " : " ") << excno;
   if (mode && st->get_stack().pop_bool() != (bool)(mode & 1)) {
     return 0;
   } else {
@@ -973,7 +973,7 @@ int exec_throw_fixed(VmState* st, unsigned args, unsigned mask, int mode) {
 int exec_throw_arg_fixed(VmState* st, unsigned args, unsigned mask, int mode) {
   unsigned excno = args & mask;
   Stack& stack = st->get_stack();
-  VM_LOG(st) << "execute THROWARG" << (mode ? "IF" : "") << (mode & 1 ? " " : "NOT ") << excno;
+  VM_LOG(st) << "execute THROWARG" << (mode ? "IF" : "") << (mode == 2 ? "NOT " : " ") << excno;
   stack.check_underflow(mode ? 2 : 1);
   if (mode && stack.pop_bool() != (bool)(mode & 1)) {
     stack.pop();

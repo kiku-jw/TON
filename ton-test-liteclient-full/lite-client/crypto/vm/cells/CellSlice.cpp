@@ -28,7 +28,9 @@ namespace {
 Cell::LoadedCell load_cell_nothrow(const Ref<Cell>& ref) {
   auto res = ref->load_cell();
   if (res.is_ok()) {
-    return res.move_as_ok();
+    auto ld = res.move_as_ok();
+    CHECK(ld.virt.get_virtualization() == 0 || ld.data_cell->special_type() != Cell::SpecialType::PrunnedBranch);
+    return ld;
   }
   return {};
 }
@@ -37,6 +39,7 @@ Cell::LoadedCell load_cell_nothrow(const Ref<Cell>& ref, int mode) {
   auto res = ref->load_cell();
   if (res.is_ok()) {
     auto ld = res.move_as_ok();
+    CHECK(ld.virt.get_virtualization() == 0 || ld.data_cell->special_type() != Cell::SpecialType::PrunnedBranch);
     if ((mode >> (ld.data_cell->is_special() ? 1 : 0)) & 1) {
       return ld;
     }
@@ -566,7 +569,7 @@ td::RefInt256 CellSlice::fetch_int256(unsigned bits, bool sgnd) {
     return td::RefInt256{true, val};
   } else {
     td::RefInt256 res{true};
-    res.unique_write()->import_bits(data_bits(), bits, sgnd);
+    res.unique_write().import_bits(data_bits(), bits, sgnd);
     advance(bits);
     return res;
   }
@@ -580,7 +583,7 @@ td::RefInt256 CellSlice::prefetch_int256(unsigned bits, bool sgnd) const {
     return td::RefInt256{true, val};
   } else {
     td::RefInt256 res{true};
-    res.unique_write()->import_bits(data_bits(), bits, sgnd);
+    res.unique_write().import_bits(data_bits(), bits, sgnd);
     return res;
   }
 }
@@ -596,7 +599,7 @@ td::RefInt256 CellSlice::prefetch_int256_zeroext(unsigned bits, bool sgnd) const
       return td::RefInt256{true, val};
     } else {
       td::RefInt256 res{true};
-      res.unique_write()->import_bits(data_bits(), ld_bits, sgnd);
+      res.unique_write().import_bits(data_bits(), ld_bits, sgnd);
       res <<= bits - ld_bits;
       return res;
     }

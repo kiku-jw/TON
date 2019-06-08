@@ -58,9 +58,32 @@ void interpret_dot_cellslice_rec(IntCtx& ctx) {
 
 void interpret_dotstack(IntCtx& ctx) {
   for (int i = ctx.stack.depth(); i > 0; i--) {
-    *ctx.output_stream << ctx.stack[i - 1].to_string() << " ";
+    ctx.stack[i - 1].dump(*ctx.output_stream);
+    *ctx.output_stream << ' ';
   }
   *ctx.output_stream << std::endl;
+}
+
+void interpret_dotstack_list(IntCtx& ctx) {
+  for (int i = ctx.stack.depth(); i > 0; i--) {
+    ctx.stack[i - 1].print_list(*ctx.output_stream);
+    *ctx.output_stream << ' ';
+  }
+  *ctx.output_stream << std::endl;
+}
+
+void interpret_dump(IntCtx& ctx) {
+  ctx.stack.pop_chk().dump(*ctx.output_stream);
+  *ctx.output_stream << ' ';
+}
+
+void interpret_dump_internal(vm::Stack& stack) {
+  stack.push_string(stack.pop_chk().to_string());
+}
+
+void interpret_print_list(IntCtx& ctx) {
+  ctx.stack.pop_chk().print_list(*ctx.output_stream);
+  *ctx.output_stream << ' ';
 }
 
 void interpret_dottc(IntCtx& ctx) {
@@ -85,7 +108,7 @@ void interpret_plus(vm::Stack& stack) {
 
 void interpret_cond_dup(vm::Stack& stack) {
   auto x = stack.pop_int();
-  if ((*x)->sgn()) {
+  if (x->sgn()) {
     stack.push_int(x);
   }
   stack.push_int(std::move(x));
@@ -126,10 +149,10 @@ void interpret_times_div(vm::Stack& stack, int round_mode) {
   auto y = stack.pop_int();
   auto x = stack.pop_int();
   td::BigIntG<257 * 2> tmp{0};
-  tmp.add_mul(**x, **y);
+  tmp.add_mul(*x, *y);
   auto q = td::RefInt256{true};
-  tmp.mod_div(**z, *(q.unique_write()), round_mode);
-  q.unique_write()->normalize();
+  tmp.mod_div(*z, q.unique_write(), round_mode);
+  q.unique_write().normalize();
   stack.push_int(std::move(q));
 }
 
@@ -138,10 +161,10 @@ void interpret_times_divmod(vm::Stack& stack, int round_mode) {
   auto y = stack.pop_int();
   auto x = stack.pop_int();
   td::BigIntG<257 * 2> tmp{0};
-  tmp.add_mul(**x, **y);
+  tmp.add_mul(*x, *y);
   auto q = td::RefInt256{true};
-  tmp.mod_div(**z, *(q.unique_write()), round_mode);
-  q.unique_write()->normalize();
+  tmp.mod_div(*z, q.unique_write(), round_mode);
+  q.unique_write().normalize();
   auto r = td::RefInt256{true, tmp};
   stack.push_int(std::move(q));
   stack.push_int(std::move(r));
@@ -152,9 +175,9 @@ void interpret_times_mod(vm::Stack& stack, int round_mode) {
   auto y = stack.pop_int();
   auto x = stack.pop_int();
   td::BigIntG<257 * 2> tmp{0};
-  tmp.add_mul(**x, **y);
+  tmp.add_mul(*x, *y);
   td::BigIntG<257 * 2> q;
-  tmp.mod_div(**z, q, round_mode);
+  tmp.mod_div(*z, q, round_mode);
   auto r = td::RefInt256{true, tmp};
   stack.push_int(std::move(r));
 }
@@ -178,14 +201,14 @@ void interpret_literal(vm::Stack& stack, vm::StackEntry se) {
 void interpret_cmp(vm::Stack& stack, const char opt[3]) {
   auto y = stack.pop_int();
   auto x = stack.pop_int();
-  int r = (*x)->cmp(**y);
+  int r = x->cmp(*y);
   assert((unsigned)(r + 1) <= 2);
   stack.push_smallint(((const signed char*)opt)[r + 1]);
 }
 
 void interpret_sgn(vm::Stack& stack, const char opt[3]) {
   auto x = stack.pop_int();
-  int r = (*x)->sgn();
+  int r = x->sgn();
   assert((unsigned)(r + 1) <= 2);
   stack.push_smallint(((const signed char*)opt)[r + 1]);
 }
@@ -193,34 +216,34 @@ void interpret_sgn(vm::Stack& stack, const char opt[3]) {
 void interpret_fits(vm::Stack& stack, bool sgnd) {
   int n = stack.pop_smallint_range(1023);
   auto x = stack.pop_int();
-  stack.push_bool((*x)->fits_bits(n, sgnd));
+  stack.push_bool(x->fits_bits(n, sgnd));
 }
 
 void interpret_pow2(vm::Stack& stack) {
   int x = stack.pop_smallint_range(255);
   auto r = td::RefInt256{true};
-  r.unique_write()->set_pow2(x);
+  r.unique_write().set_pow2(x);
   stack.push_int(r);
 }
 
 void interpret_neg_pow2(vm::Stack& stack) {
   int x = stack.pop_smallint_range(256);
   auto r = td::RefInt256{true};
-  r.unique_write()->set_pow2(x).negate().normalize();
+  r.unique_write().set_pow2(x).negate().normalize();
   stack.push_int(r);
 }
 
 void interpret_pow2_minus1(vm::Stack& stack) {
   int x = stack.pop_smallint_range(256);
   auto r = td::RefInt256{true};
-  r.unique_write()->set_pow2(x).add_tiny(-1).normalize();
+  r.unique_write().set_pow2(x).add_tiny(-1).normalize();
   stack.push_int(r);
 }
 
 void interpret_mod_pow2(vm::Stack& stack) {
   int y = stack.pop_smallint_range(256);
   auto x = stack.pop_int();
-  x.write()->mod_pow2(y).normalize();
+  x.write().mod_pow2(y).normalize();
   stack.push_int(x);
 }
 
@@ -247,7 +270,7 @@ void interpret_times_rshift(vm::Stack& stack, int round_mode) {
   auto y = stack.pop_int();
   auto x = stack.pop_int();
   td::BigIntG<257 * 2> tmp{0};
-  tmp.add_mul(**x, **y).rshift(z, round_mode).normalize();
+  tmp.add_mul(*x, *y).rshift(z, round_mode).normalize();
   auto q = td::RefInt256{true, tmp};
   stack.push_int(std::move(q));
 }
@@ -256,11 +279,11 @@ void interpret_lshift_div(vm::Stack& stack, int round_mode) {
   int z = stack.pop_smallint_range(256);
   auto y = stack.pop_int();
   auto x = stack.pop_int();
-  td::BigIntG<257 * 2> tmp{**x};
+  td::BigIntG<257 * 2> tmp{*x};
   tmp <<= z;
   auto q = td::RefInt256{true};
-  tmp.mod_div(**y, *(q.unique_write()), round_mode);
-  q.unique_write()->normalize();
+  tmp.mod_div(*y, q.unique_write(), round_mode);
+  q.unique_write().normalize();
   stack.push_int(std::move(q));
 }
 
@@ -554,9 +577,9 @@ void interpret_bytes_fetch_int(vm::Stack& stack, int mode) {
   bool ok;
   const unsigned char* ptr = (const unsigned char*)(str.data());
   if (!(mode & 0x10)) {
-    ok = x.write()->import_bytes(ptr, sz, mode & 1);
+    ok = x.write().import_bytes(ptr, sz, mode & 1);
   } else {
-    ok = x.write()->import_bytes_lsb(ptr, sz, mode & 1);
+    ok = x.write().import_bytes_lsb(ptr, sz, mode & 1);
   }
   if (!ok) {
     throw IntError{"cannot load integer"};
@@ -576,7 +599,7 @@ void interpret_int_to_bytes(vm::Stack& stack, bool sgnd, bool lsb) {
   }
   unsigned sz = bits >> 3;
   unsigned char buffer[33];
-  if (!(lsb ? (*x)->export_bytes_lsb(buffer, sz, sgnd) : (*x)->export_bytes(buffer, sz, sgnd))) {
+  if (!(lsb ? x->export_bytes_lsb(buffer, sz, sgnd) : x->export_bytes(buffer, sz, sgnd))) {
     throw IntError{"cannot store integer"};
   }
   stack.push_bytes(std::string{(char*)buffer, sz});
@@ -587,7 +610,7 @@ void interpret_bytes_hash(vm::Stack& stack) {
   unsigned char buffer[32];
   digest::hash_str<digest::SHA256>(buffer, str.c_str(), str.size());
   td::RefInt256 x{true};
-  x.write()->import_bytes(buffer, 32, false);
+  x.write().import_bytes(buffer, 32, false);
   stack.push_int(std::move(x));
 }
 
@@ -600,7 +623,7 @@ void interpret_store(vm::Stack& stack, bool sgnd) {
   int bits = stack.pop_smallint_range(1023);
   auto x = stack.pop_int();
   auto cell = stack.pop_builder();
-  if (!cell.write().store_bigint256_bool(**x, bits, sgnd)) {
+  if (!cell.write().store_bigint256_bool(*x, bits, sgnd)) {
     throw IntError{"integer does not fit into cell"};
   }
   stack.push(cell);
@@ -713,7 +736,7 @@ void interpret_builder_remaining_bitrefs(vm::Stack& stack, int mode) {
 void interpret_cell_hash(vm::Stack& stack) {
   auto cell = stack.pop_cell();
   td::RefInt256 hash{true};
-  hash.write()->import_bytes(cell->get_hash().as_slice().ubegin(), 32, false);
+  hash.write().import_bytes(cell->get_hash().as_slice().ubegin(), 32, false);
   stack.push_int(std::move(hash));
 }
 
@@ -847,7 +870,7 @@ void interpret_hole(vm::Stack& stack) {
 }
 
 void interpret_box(vm::Stack& stack) {
-  stack.push_box(Ref<vm::Box>{true, stack.pop()});
+  stack.push_box(Ref<vm::Box>{true, stack.pop_chk()});
 }
 
 void interpret_box_fetch(vm::Stack& stack) {
@@ -855,6 +878,7 @@ void interpret_box_fetch(vm::Stack& stack) {
 }
 
 void interpret_box_store(vm::Stack& stack) {
+  stack.check_underflow(2);
   auto box = stack.pop_box();
   box->set(stack.pop());
 }
@@ -864,7 +888,85 @@ void interpret_push_null(vm::Stack& stack) {
 }
 
 void interpret_is_null(vm::Stack& stack) {
-  stack.push_bool(stack.pop().empty());
+  stack.push_bool(stack.pop_chk().empty());
+}
+
+// Tuple/array operations
+
+void interpret_empty_tuple(vm::Stack& stack) {
+  stack.push_tuple(Ref<vm::Tuple>{true});
+}
+
+void interpret_tuple_push(vm::Stack& stack) {
+  stack.check_underflow(2);
+  auto val = stack.pop();
+  auto tuple = stack.pop_tuple();
+  tuple.write().emplace_back(std::move(val));
+  stack.push_tuple(std::move(tuple));
+}
+
+void interpret_tuple_len(vm::Stack& stack) {
+  stack.push_smallint(stack.pop_tuple()->size());
+}
+
+void interpret_tuple_index(vm::Stack& stack) {
+  auto idx = stack.pop_long_range(std::numeric_limits<long long>::max());
+  auto tuple = stack.pop_tuple();
+  if ((std::size_t)idx >= tuple->size()) {
+    throw vm::VmError{vm::Excno::range_chk, "array index out of range"};
+  }
+  stack.push((*tuple)[idx]);
+}
+
+void interpret_make_tuple(vm::Stack& stack) {
+  int n = stack.pop_smallint_range(255);
+  stack.check_underflow(n);
+  Ref<vm::Tuple> ref{true};
+  auto& tuple = ref.unique_write();
+  tuple.reserve(n);
+  for (int i = n - 1; i >= 0; i--) {
+    tuple.push_back(std::move(stack[i]));
+  }
+  stack.pop_many(n);
+  stack.push_tuple(std::move(ref));
+}
+
+void interpret_tuple_explode(vm::Stack& stack, bool pop_count) {
+  std::size_t n = pop_count ? (unsigned)stack.pop_smallint_range(255) : 0;
+  auto ref = stack.pop_tuple();
+  const auto& tuple = *ref;
+  if (!pop_count) {
+    n = tuple.size();
+    if (n > 255) {
+      throw IntError{"tuple too large to be exploded"};
+    }
+  } else if (tuple.size() != (unsigned)n) {
+    throw IntError{"tuple size mismatch"};
+  }
+  if (ref.is_unique()) {
+    auto& tuplew = ref.unique_write();
+    for (auto& entry : tuplew) {
+      stack.push(std::move(entry));
+    }
+  } else {
+    for (const auto& entry : tuple) {
+      stack.push(entry);
+    }
+  }
+  if (!pop_count) {
+    stack.push_smallint((int)n);
+  }
+}
+
+void interpret_allot(vm::Stack& stack) {
+  auto n = stack.pop_long_range(0xffffffff);
+  Ref<vm::Tuple> ref{true};
+  auto& tuple = ref.unique_write();
+  tuple.reserve(n);
+  while (n-- > 0) {
+    tuple.emplace_back(Ref<vm::Box>{true});
+  }
+  stack.push(std::move(ref));
 }
 
 // BoC (de)serialization
@@ -916,11 +1018,11 @@ void interpret_read_file_part(IntCtx& ctx) {
   auto size = ctx.stack.pop_long_range(std::numeric_limits<long long>::max());
   auto offset = ctx.stack.pop_long_range(std::numeric_limits<long long>::max());
   std::string filename = ctx.stack.pop_string();
-  auto r_data = td::read_file_str(filename, size, offset);
+  auto r_data = ctx.source_lookup->read_file_part(filename, size, offset);
   if (r_data.is_error()) {
     throw IntError{PSTRING() << "error reading file `" << filename << "`: " << r_data.error()};
   }
-  ctx.stack.push_bytes(r_data.move_as_ok());
+  ctx.stack.push_bytes(r_data.move_as_ok().data);
 }
 
 void interpret_write_file(IntCtx& ctx) {
@@ -934,8 +1036,8 @@ void interpret_write_file(IntCtx& ctx) {
 
 void interpret_file_exists(IntCtx& ctx) {
   std::string filename = ctx.stack.pop_string();
-  auto res = td::stat(filename);
-  ctx.stack.push_bool(res.is_ok());
+  auto res = ctx.source_lookup->is_file_exists(filename);
+  ctx.stack.push_bool(res);
 }
 
 // custom and crypto
@@ -992,7 +1094,7 @@ void interpret_ed25519_sign_uint(vm::Stack& stack) {
     throw IntError{"Ed25519 private key must be exactly 32 bytes long"};
   }
   unsigned char data[32];
-  if (!(*data_int)->export_bytes(data, 32, false)) {
+  if (!data_int->export_bytes(data, 32, false)) {
     throw IntError{"Ed25519 data to be signed must fit into 256 bits"};
   }
   td::Ed25519::PrivateKey priv_key{td::Slice{key}};
@@ -1357,38 +1459,39 @@ int parse_number(std::string s, td::RefInt256& num, td::RefInt256& denom, bool a
   int len = (int)s.size();
   int frac = -1, base, *frac_ptr = allow_frac ? &frac : nullptr;
   num = td::RefInt256{true};
+  auto& x = num.unique_write();
   if (len >= 4 && str[0] == '-' && str[1] == '0' && (str[2] == 'x' || str[2] == 'b')) {
     if (str[2] == 'x') {
       base = 16;
-      if (num.unique_write()->parse_hex(str + 3, len - 3, frac_ptr) != len - 3) {
+      if (x.parse_hex(str + 3, len - 3, frac_ptr) != len - 3) {
         return 0;
       }
     } else {
       base = 2;
-      if (num.unique_write()->parse_binary(str + 3, len - 3, frac_ptr) != len - 3) {
+      if (x.parse_binary(str + 3, len - 3, frac_ptr) != len - 3) {
         return 0;
       }
     }
-    num.unique_write()->negate();
+    x.negate();
   } else if (len >= 3 && str[0] == '0' && (str[1] == 'x' || str[1] == 'b')) {
     if (str[1] == 'x') {
       base = 16;
-      if (num.unique_write()->parse_hex(str + 2, len - 2, frac_ptr) != len - 2) {
+      if (x.parse_hex(str + 2, len - 2, frac_ptr) != len - 2) {
         return 0;
       }
     } else {
       base = 2;
-      if (num.unique_write()->parse_binary(str + 2, len - 2, frac_ptr) != len - 2) {
+      if (x.parse_binary(str + 2, len - 2, frac_ptr) != len - 2) {
         return 0;
       }
     }
   } else {
     base = 10;
-    if (num.unique_write()->parse_dec(str, len, frac_ptr) != len) {
+    if (x.parse_dec(str, len, frac_ptr) != len) {
       return 0;
     }
   }
-  if (!num.unique_write()->signed_fits_bits(257)) {
+  if (!x.signed_fits_bits(257)) {
     if (throw_error) {
       throw IntError{"integer constant too large"};
     }
@@ -1399,14 +1502,14 @@ int parse_number(std::string s, td::RefInt256& num, td::RefInt256& denom, bool a
   } else {
     denom = td::RefInt256{true, 1};
     while (frac-- > 0) {
-      if (!denom.unique_write()->mul_tiny(base).normalize_bool()) {
+      if (!denom.unique_write().mul_tiny(base).normalize_bool()) {
         if (throw_error) {
           throw IntError{"denominator in constant too large"};
         }
         return 0;
       }
     }
-    if (!denom.unique_write()->unsigned_fits_bits(256)) {
+    if (!denom.unique_write().unsigned_fits_bits(256)) {
       if (throw_error) {
         throw IntError{"denominator in constant too large"};
       }
@@ -1556,23 +1659,23 @@ void interpret_pack_std_smc_addr(vm::Stack& stack) {
   if (td::sgn(x) < 0) {
     throw IntError{"non-negative integer expected"};
   }
-  CHECK((*x)->export_bytes(a.addr.data(), 32, false));
+  CHECK(x->export_bytes(a.addr.data(), 32, false));
   a.workchain = stack.pop_smallint_range(0x7f, -0x80);
   a.testnet = mode & 2;
-  a.bounceable = mode & 1;
+  a.bounceable = !(mode & 1);
   stack.push_string(a.rserialize(mode & 4));
 }
 
 void interpret_unpack_std_smc_addr(vm::Stack& stack) {
-  block::StdAddress a{stack.pop_string()};
-  if (!a.is_valid()) {
+  block::StdAddress a;
+  if (!a.parse_addr(stack.pop_string())) {
     stack.push_bool(false);
   } else {
     stack.push_smallint(a.workchain);
     td::RefInt256 x{true};
-    CHECK(x.write()->import_bytes(a.addr.data(), 32, false));
+    CHECK(x.write().import_bytes(a.addr.data(), 32, false));
     stack.push_int(std::move(x));
-    stack.push_smallint(a.testnet * 2 + a.bounceable);
+    stack.push_smallint(a.testnet * 2 + 1 - a.bounceable);
     stack.push_bool(true);
   }
 }
@@ -1789,7 +1892,12 @@ void interpret_compile_internal(vm::Stack& stack) {
 void do_compile(vm::Stack& stack, Ref<WordDef> word_def) {
   Ref<WordList> wl_ref = pop_word_list(stack);
   if (word_def != Dictionary::nop_word_def) {
-    wl_ref.write().push_back(word_def);
+    if ((std::size_t)word_def->list_size() <= 1) {
+      // inline short definitions
+      wl_ref.write().append(*(word_def->get_list()));
+    } else {
+      wl_ref.write().push_back(word_def);
+    }
   }
   stack.push({vm::from_object, wl_ref});
 }
@@ -1798,10 +1906,10 @@ void compile_one_literal(WordList& wlist, vm::StackEntry val) {
   using namespace std::placeholders;
   if (val.type() == vm::StackEntry::t_int) {
     auto x = std::move(val).as_int();
-    if (!(*x)->signed_fits_bits(257)) {
+    if (!x->signed_fits_bits(257)) {
       throw IntError{"invalid numeric literal"};
-    } else if ((*x)->signed_fits_bits(64)) {
-      wlist.push_back(Ref<StackWord>{true, std::bind(interpret_const, _1, (*x)->to_long())});
+    } else if (x->signed_fits_bits(64)) {
+      wlist.push_back(Ref<StackWord>{true, std::bind(interpret_const, _1, x->to_long())});
     } else {
       wlist.push_back(Ref<StackWord>{true, std::bind(interpret_big_const, _1, std::move(x))});
     }
@@ -1838,7 +1946,11 @@ void init_words_common(Dictionary& d) {
   d.def_ctx_word("b._ ", std::bind(interpret_dotbinary, _1, false));
   d.def_ctx_word("csr. ", interpret_dot_cellslice_rec);
   d.def_ctx_word(".s ", interpret_dotstack);
+  d.def_ctx_word(".sl ", interpret_dotstack_list);
+  d.def_ctx_word(".dump ", interpret_dump);
+  d.def_ctx_word(".l ", interpret_print_list);
   d.def_ctx_word(".tc ", interpret_dottc);
+  d.def_stack_word("(dump) ", interpret_dump_internal);
   d.def_stack_word("(.) ", interpret_dot_internal);
   d.def_stack_word("(x.) ", interpret_dothex_internal);
   d.def_stack_word("(b.) ", interpret_dotbinary_internal);
@@ -2061,6 +2173,15 @@ void init_words_common(Dictionary& d) {
   d.def_stack_word("! ", interpret_box_store);
   d.def_stack_word("null ", interpret_push_null);
   d.def_stack_word("null? ", interpret_is_null);
+  // tuples/arrays
+  d.def_stack_word("| ", interpret_empty_tuple);
+  d.def_stack_word(", ", interpret_tuple_push);
+  d.def_stack_word("[] ", interpret_tuple_index);
+  d.def_stack_word("count ", interpret_tuple_len);
+  d.def_stack_word("tuple ", interpret_make_tuple);
+  d.def_stack_word("untuple ", std::bind(interpret_tuple_explode, _1, true));
+  d.def_stack_word("explode ", std::bind(interpret_tuple_explode, _1, false));
+  d.def_stack_word("allot ", interpret_allot);
   // execution control
   d.def_ctx_word("execute ", interpret_execute);
   d.def_ctx_word("times ", interpret_execute_times);
@@ -2121,7 +2242,7 @@ void init_words_vm(Dictionary& d) {
   d.def_ctx_word("dbrunvm-parallel ", interpret_db_run_vm_parallel);
 }
 
-void import_cmdline_args(Dictionary& d, std::string arg0, int n, char* const argv[]) {
+void import_cmdline_args(Dictionary& d, std::string arg0, int n, const char* const argv[]) {
   using namespace std::placeholders;
   LOG(DEBUG) << "import_cmdlist_args(" << arg0 << "," << n << ")";
   d.def_stack_word("$0 ", std::bind(interpret_literal, _1, vm::StackEntry{arg0}));
@@ -2179,8 +2300,9 @@ int funny_interpret_loop(IntCtx& ctx) {
           ptr_end = ptr;
         }
       }
-      if (!entry) {
-        entry = ctx.dictionary->lookup(Word + " ");
+      auto cur = ctx.dictionary->lookup(Word + " ");
+      if (cur || !entry) {
+        entry = std::move(cur);
         ctx.set_input(ptr);
         ctx.skipspc();
       } else {
